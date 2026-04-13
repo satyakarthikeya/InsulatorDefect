@@ -1,12 +1,10 @@
-# Analog Project: Ultra-Lightweight Insulator Defect Detection
+# InsulatorDefect: Ultra-Lightweight Damage Detection for Power Transmission Insulators
 
-This repository contains a full training, evaluation, and edge-deployment workflow for an ultra-lightweight YOLO model for insulator defect detection.
+A production-ready training, evaluation, and edge-deployment framework for detecting insulator damage on power transmission lines using an ultra-lightweight YOLO model.
 
-Model family used in this project:
-- YOLO11n-Ghost-Hybrid-P3P4-Medium
+**Model:** YOLO11n-Ghost-Hybrid-P3P4-Medium (867K parameters)
 
-Core objective:
-- Detect rare insulator damage (Damaged_1) with high accuracy on constrained edge hardware.
+**Objective:** Detect rare insulator defects (Damaged_1) with 96%+ mAP50 on constrained edge hardware (Raspberry Pi / NVIDIA Jetson).
 
 ## Key Results
 
