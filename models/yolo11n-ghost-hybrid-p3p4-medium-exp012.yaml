@@ -1,0 +1,65 @@
+# Ultralytics YOLO , AGPL-3.0 License
+# YOLO11n-Ghost-Hybrid-P3P4-Medium — EXP-012 Head-Only Fine-Tune @ 768
+#
+# Experiment:  exp_012_head_finetune_768
+# Base weights: experiments/exp_009_finetune_768/weights/best.pt
+# Strategy:    Backbone FROZEN (layers 0-9), Head TRAINABLE (layers 10-23)
+# Resolution:  768 × 768
+# Result:      96.46% mAP50  (+0.35% over exp_009 base)
+#
+# Architecture: GhostConv backbone + DWConv head + P3/P4 detection only
+# Parameters:  ~867K  |  GFLOPs: ~5.8
+# Classes:     Damaged_1, insulator (nc=2)
+#
+# ┌──────────────────────────────────────────────────────────┐
+# │  FROZEN during exp_012 training (layers 0–9)             │
+# │  → Backbone preserved from exp_009 weights               │
+# └──────────────────────────────────────────────────────────┘
+# ┌──────────────────────────────────────────────────────────┐
+# │  TRAINABLE during exp_012 training (layers 10–23)        │
+# │  → Head-only fine-tune with SGD + cosine LR              │
+# └──────────────────────────────────────────────────────────┘
+
+nc: 2  # number of classes: Damaged_1, insulator
+
+# ============================================================
+# BACKBONE: GhostConv + C3Ghost  ── FROZEN in exp_012 ──
+# ============================================================
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,      [32, 3, 2]]        # 0  P1/2   Stem  (FROZEN)
+  - [-1, 1, GhostConv, [64, 3, 2]]        # 1  P2/4          (FROZEN)
+  - [-1, 2, C3Ghost,   [64]]              # 2         Feature extraction  (FROZEN)
+  - [-1, 1, GhostConv, [128, 3, 2]]       # 3  P3/8          (FROZEN)
+  - [-1, 3, C3Ghost,   [128]]             # 4         P3 output ★  (FROZEN)
+  - [-1, 1, GhostConv, [160, 3, 2]]       # 5  P4/16         (FROZEN)
+  - [-1, 3, C3Ghost,   [160]]             # 6         P4 output ★  (FROZEN)
+  - [-1, 1, GhostConv, [160, 3, 2]]       # 7  P5/32         (FROZEN)
+  - [-1, 2, C3Ghost,   [160]]             # 8         Context features  (FROZEN)
+  - [-1, 1, SPPF,      [160, 5]]          # 9         Multi-scale pooling  (FROZEN)
+
+# ============================================================
+# HEAD: DWConv FPN-PAN  ── TRAINABLE in exp_012 ──
+# ============================================================
+head:
+  # --- Top-down: P5 → P4 upsampling path ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 10  Upsample P5→P4  (TRAINABLE)
+  - [[-1, 6], 1, Concat, [1]]                   # 11  Cat P4 backbone (160+160=320)  (TRAINABLE)
+  - [-1, 1, DWConv, [80, 3]]                    # 12  Depthwise reduction  (TRAINABLE)
+  - [-1, 1, Conv,   [80, 1]]                    # 13  Pointwise  (TRAINABLE)
+
+  # --- Top-down: P4 → P3 upsampling path ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 14  Upsample P4→P3  (TRAINABLE)
+  - [[-1, 4], 1, Concat, [1]]                   # 15  Cat P3 backbone (80+128=208)  (TRAINABLE)
+  - [-1, 1, DWConv, [64, 3]]                    # 16  Depthwise reduction  (TRAINABLE)
+  - [-1, 1, Conv,   [64, 1]]                    # 17  P3 detection output ★  (TRAINABLE)
+
+  # --- Bottom-up: P3 → P4 downsampling path ---
+  - [-1, 1, DWConv, [64, 3, 2]]                 # 18  Downsample P3→P4  (TRAINABLE)
+  - [-1, 1, Conv,   [80, 1]]                    # 19  Channel adjust  (TRAINABLE)
+  - [[-1, 13], 1, Concat, [1]]                  # 20  Cat P4 head (80+80=160)  (TRAINABLE)
+  - [-1, 1, DWConv, [80, 3]]                    # 21  Depthwise fusion  (TRAINABLE)
+  - [-1, 1, Conv,   [80, 1]]                    # 22  P4 detection output ★  (TRAINABLE)
+
+  # --- Detection ---
+  - [[17, 22], 1, Detect, [nc]]                 # 23  Detect(P3, P4) — 2-scale  (TRAINABLE)

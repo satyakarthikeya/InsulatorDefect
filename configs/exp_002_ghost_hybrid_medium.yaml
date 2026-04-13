@@ -1,0 +1,60 @@
+# ============================================
+# Experiment 002: Ghost-Hybrid-P3P4 Medium
+# ============================================
+# Base training config for 867K parameter model
+# Architecture: GhostConv backbone + DWConv head
+# Target: ~81% mAP50 as base for TFA fine-tuning
+
+# Model
+model: models/yolo11n-ghost-hybrid-p3p4-medium.yaml
+data: VOC/voc.yaml
+
+# Training Parameters
+epochs: 300
+patience: 50
+batch: 8           # Fixed for 4GB VRAM (RTX 3050)
+imgsz: 640
+optimizer: AdamW
+
+# Learning Rate
+lr0: 0.01
+lrf: 0.1
+
+# Optimizer
+momentum: 0.937
+weight_decay: 0.0005
+
+# Warmup
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# Augmentation
+mosaic: 1.0
+mixup: 0.1
+degrees: 10.0
+translate: 0.2
+scale: 0.9
+shear: 2.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+erasing: 0.4
+copy_paste: 0.0
+
+# Loss Weights
+box: 7.5
+cls: 0.5
+dfl: 1.5
+
+# Performance - OPTIMIZED for RTX 3050 (4GB VRAM) + 16GB RAM
+cache: ram         # Cache in RAM, not VRAM
+workers: 4         # Reduced to save RAM
+amp: True          # Mixed precision - saves ~40% VRAM
+device: 0
+project: experiments
+name: exp_002_ghost_hybrid_medium
+exist_ok: False

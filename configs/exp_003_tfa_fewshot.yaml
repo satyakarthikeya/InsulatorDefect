@@ -1,0 +1,76 @@
+# ============================================
+# Experiment 003: TFA Few-Shot Fine-Tuning
+# ============================================
+# Two-Stage Fine-tuning Approach (TFA)
+# Stage 2: Freeze backbone, fine-tune head
+# Prerequisite: exp_002 best weights
+# Target: ~90% mAP50
+
+# Model - Load from exp_002 best weights
+model: experiments/exp_002_ghost_hybrid_medium/weights/best.pt
+data: VOC/voc.yaml
+
+# Layer Freezing - CRITICAL for TFA
+freeze: 10          # Freeze first 10 layers (entire backbone)
+
+# Training Parameters
+epochs: 50          # Shorter than base (was 300)
+patience: 20        # Early stopping
+batch: 8            # Fixed for 4GB VRAM (RTX 3050)
+imgsz: 640
+optimizer: AdamW
+
+# Learning Rate - 10x LOWER than base
+lr0: 0.0001         # Was 0.01 in base training
+lrf: 0.1            # Final LR: 1e-5
+warmup_epochs: 2.0  # Short warmup
+warmup_momentum: 0.8
+warmup_bias_lr: 0.01
+
+# Optimizer
+momentum: 0.937
+weight_decay: 0.0005
+
+# ============================================
+# REDUCED AUGMENTATION (Key for Few-Shot!)
+# ============================================
+# Rationale: Heavy augmentation hurts with limited rare-class samples
+# Backbone already learned robust features - gentle tuning only
+
+# Mosaic/MixUp - Reduced
+mosaic: 0.5          # REDUCED from 1.0
+mixup: 0.0           # DISABLED (was 0.1)
+copy_paste: 0.0      # DISABLED
+
+# Geometric Transforms - Reduced
+degrees: 5.0         # REDUCED from 10.0
+translate: 0.1       # REDUCED from 0.2
+scale: 0.3           # REDUCED from 0.9
+shear: 1.0           # REDUCED from 2.0
+perspective: 0.0     # DISABLED
+flipud: 0.0          # DISABLED
+fliplr: 0.5          # Keep horizontal flip
+
+# Color Augmentation - Reduced
+hsv_h: 0.01          # REDUCED from 0.015
+hsv_s: 0.5           # REDUCED from 0.7
+hsv_v: 0.3           # REDUCED from 0.4
+
+# Erasing - Reduced
+erasing: 0.2         # REDUCED from 0.4
+
+# ============================================
+# LOSS WEIGHTS
+# ============================================
+box: 7.5
+cls: 0.5
+dfl: 1.5
+
+# Other - OPTIMIZED for RTX 3050 (4GB VRAM) + 16GB RAM
+cache: ram         # Cache in RAM, not VRAM
+workers: 4         # Reduced to save RAM  
+amp: True          # Mixed precision - saves ~40% VRAM
+device: 0
+project: experiments
+name: exp_tfa_fewshot
+exist_ok: False

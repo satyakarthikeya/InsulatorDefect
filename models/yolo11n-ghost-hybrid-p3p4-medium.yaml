@@ -1,0 +1,54 @@
+# Ultralytics YOLO , AGPL-3.0 License
+# YOLO11n-Ghost-Hybrid-P3P4-Medium - Custom Lightweight Architecture
+# Parameters: ~867K | GFLOPs: ~5.8
+# Optimized for insulator defect detection with edge deployment
+#
+# Architecture: GhostConv backbone + DWConv head + P3/P4 detection only
+# - GhostConv reduces backbone params ~50%
+# - C3Ghost blocks for efficient feature extraction
+# - DWConv in head for ~9x param reduction
+# - Removed P5 detection (optimized for small/medium objects)
+
+nc: 2  # number of classes: Damaged_1, insulator
+
+# ============================================================
+# BACKBONE: GhostConv + C3Ghost (Feature Extraction)
+# ============================================================
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [32, 3, 2]]            # 0  P1/2   Stem
+  - [-1, 1, GhostConv, [64, 3, 2]]       # 1  P2/4
+  - [-1, 2, C3Ghost, [64]]               # 2         Feature extraction
+  - [-1, 1, GhostConv, [128, 3, 2]]      # 3  P3/8
+  - [-1, 3, C3Ghost, [128]]              # 4         P3 output ★
+  - [-1, 1, GhostConv, [160, 3, 2]]      # 5  P4/16
+  - [-1, 3, C3Ghost, [160]]              # 6         P4 output ★
+  - [-1, 1, GhostConv, [160, 3, 2]]      # 7  P5/32
+  - [-1, 2, C3Ghost, [160]]              # 8         Context features
+  - [-1, 1, SPPF, [160, 5]]              # 9         Multi-scale pooling
+
+# ============================================================
+# HEAD: DWConv (Lightweight Detection)
+# ============================================================
+head:
+  # --- P5 → P4 upsampling path ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]   # 10  Upsample P5→P4
+  - [[-1, 6], 1, Concat, [1]]                     # 11  Cat with P4 backbone (160+160=320)
+  - [-1, 1, DWConv, [80, 3]]                      # 12  Depthwise reduction
+  - [-1, 1, Conv, [80, 1]]                        # 13  Pointwise
+
+  # --- P4 → P3 upsampling path ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]    # 14  Upsample P4→P3
+  - [[-1, 4], 1, Concat, [1]]                     # 15  Cat with P3 backbone (80+128=208)
+  - [-1, 1, DWConv, [64, 3]]                      # 16  Depthwise reduction
+  - [-1, 1, Conv, [64, 1]]                        # 17  P3 detection output ★
+
+  # --- P3 → P4 downsampling path ---
+  - [-1, 1, DWConv, [64, 3, 2]]                   # 18  Downsample P3→P4
+  - [-1, 1, Conv, [80, 1]]                        # 19  Channel adjust
+  - [[-1, 13], 1, Concat, [1]]                    # 20  Cat with P4 head (80+80=160)
+  - [-1, 1, DWConv, [80, 3]]                      # 21  Depthwise fusion
+  - [-1, 1, Conv, [80, 1]]                        # 22  P4 detection output ★
+
+  # --- Detection ---
+  - [[17, 22], 1, Detect, [nc]]                   # 23  Detect(P3, P4) - 2 scale detection
