@@ -201,6 +201,7 @@ Also see:
 For detailed experiment history and analysis:
 - `BENCHMARK.md`
 - `docs/ARCHITECTURE.md`
+- `docs/ABLATION_STUDY_MAIN_MODEL.md`
 - `docs/EXPERIMENTS.md`
 - `docs/EXP_009_012_DETAILS.md`
 - `docs/EXPERIMENT_JOURNEY.md`
