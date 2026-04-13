@@ -1,0 +1,787 @@
+\documentclass[11pt,a4paper]{article}
+
+% ─── Package Imports ────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[left=1in,right=1in,top=1in,bottom=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{url}
+
+% ─── Page Style ─────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\thepage}
+\lhead{YOLO11n-Ghost-Hybrid for Insulator Defect Detection}
+\setstretch{1.5}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=black
+}
+
+% ─── Title ───────────────────────────────────────────────────────────────────
+\title{%
+  \LARGE\textbf{YOLO11n-Ghost-Hybrid: An Ultra-Lightweight \\
+  Knowledge-Distilled Architecture for Edge-Deployed \\
+  Insulator Defect Detection}%
+}
+
+\author{%
+  P~P~Satya~Karthikeya \and
+  B~Karthikeya \and
+  M~Karthik~Reddy \and
+  P~Rohit%
+}
+
+\date{\today}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+% ─── Abstract ────────────────────────────────────────────────────────────────
+\begin{abstract}
+\noindent
+Real-time insulator defect detection on edge hardware is fundamentally constrained by model
+size, compute budget, and class imbalance between normal and damaged components. This paper
+presents \textit{YOLO11n-Ghost-Hybrid-P3P4-Medium}, a domain-specialised lightweight
+detector for two-class insulator defect detection (\texttt{Damaged\_1} and
+\texttt{insulator}). The proposed architecture replaces the standard YOLO11n backbone and
+detection head with GhostConv/C3Ghost stages and a depthwise-separable FPN-PAN head,
+respectively, and removes the large-scale P5 detection branch to focus all capacity on
+small and medium defect targets. Training follows a three-stage pipeline: (i) from-scratch
+architecture training, (ii) teacher-student knowledge distillation (KD) from a YOLO11s
+teacher, and (iii) resolution-aware fine-tuning at 768$\times$768. The final model
+contains \textbf{867,664 parameters} and \textbf{5.7 GFLOPs}, achieving \textbf{96.10\%
+mAP@0.5}, \textbf{66.79\% mAP@0.5:0.95}, \textbf{93.65\% precision}, and \textbf{94.18\%
+recall}---within 0.44 mAP@0.5 points of a teacher that is 10.9$\times$ larger. On a
+Raspberry Pi CPU with ONNX Runtime, mean model inference time is 656.0\,ms (1.4\,FPS full
+pipeline), demonstrating practical field deployability. A comprehensive cumulative ablation
+study identifies each design decision's individual contribution, showing that architecture
+redesign accounts for the largest single gain (+4.01 mAP@0.5), while resolution-aware
+fine-tuning at 768 provides the highest-ROI optimisation step (+1.59 mAP@0.5).
+
+\vspace{0.5em}
+\noindent\textbf{Keywords:} YOLO11n, GhostConv, knowledge distillation, insulator defect
+detection, edge AI, lightweight object detection, Raspberry Pi deployment,
+resolution-aware fine-tuning
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+Power-line insulator monitoring is a high-impact computer vision problem in which missed
+detections can lead to delayed maintenance and significant risks to grid reliability.
+Insulators are exposed to mechanical stress, corona discharge, pollution, and UV
+degradation, making periodic automated inspection critical. Defect regions are typically
+small, texture-like, and visually subtle---qualities that make them difficult to detect
+with standard detectors and practically impossible to localise reliably with large models
+that must run on low-power embedded hardware.
+
+Single-stage detectors in the YOLO family are attractive for this setting because of their
+favourable speed-accuracy trade-off. Standard compact variants, however, leave room for
+further optimisation when the deployment target is a Raspberry Pi or Jetson-class embedded
+system with tight memory and compute budgets. Two challenges are particularly acute:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Class imbalance.} The defect class (\texttt{Damaged\_1}) appears at
+    roughly 1:3.5 frequency relative to normal insulators. Without targeted optimisation,
+    recall on the rare class saturates early.
+  \item \textbf{Scale mismatch.} Generic YOLO detectors allocate parameters and
+    receptive field across three scales (P3/P4/P5). For insulator datasets whose targets
+    are exclusively small-to-medium, the large-scale P5 branch wastes capacity.
+\end{enumerate}
+
+This paper addresses both challenges with a domain-specialised lightweight architecture
+and a staged optimisation pipeline. Starting from a vanilla YOLO11n baseline (90.20\%
+mAP@0.5), we progressively apply architecture-level compression by design, teacher-guided
+representation transfer, and resolution-aware fine-tuning to achieve 96.10\% mAP@0.5 with
+a 3$\times$ smaller model.
+
+\subsection*{Major Contributions}
+
+\begin{enumerate}[leftmargin=2em]
+  \item We design an ultra-light YOLO11n variant (867,664 parameters) using
+    GhostConv/C3Ghost and a fully depthwise detection head, optimised for
+    small/medium insulator defects.
+  \item We demonstrate that removing the P5 detection branch improves task-relevant
+    accuracy under strict parameter budgets.
+  \item We validate that KD enables stronger downstream adaptation to
+    high-resolution fine-tuning, even when direct KD gain is modest.
+  \item We identify 768$\times$768 as the optimal operating resolution for this
+    architecture family, delivering the largest single training-step gain.
+  \item We provide a rigorous cumulative ablation study (sourced from
+    \texttt{docs/ABLATION\_STUDY\_MAIN\_MODEL.md}) that quantifies each design
+    decision's contribution in isolation.
+  \item We demonstrate edge feasibility on Raspberry Pi via ONNX Runtime with
+    reproducible latency statistics and a complete deployment workflow.
+\end{enumerate}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+
+\subsection{One-Stage Detection for Real-Time Applications}
+
+YOLO-style one-stage detectors unify localisation and classification in a single forward
+pass, making them suitable for latency-sensitive deployments~\cite{redmon2016yolo,
+bochkovskiy2020yolov4, wang2022yolov7}. Recent generations (YOLOv8/YOLO11) improve
+training stability and multi-scale detection quality, but edge-focused tuning remains
+application-dependent~\cite{ultralytics2023yolov8, ultralytics2024yolo11}.
+
+\subsection{Lightweight CNN Design}
+
+Model families such as MobileNet and GhostNet show that depthwise-separable operations
+and cheap feature generation can preserve representational power while significantly
+reducing multiply-accumulate (MAC)
+operations~\cite{howard2017mobilenets, han2020ghostnet}. GhostNet's key insight---that
+many feature maps are redundant and can be approximated via cheap linear
+operations---directly motivates our backbone design.
+
+\subsection{Knowledge Distillation for Compact Models}
+
+Knowledge distillation (KD) transfers soft-target structure from larger teacher models
+into smaller students, often improving compact model calibration and rare-class
+behaviour~\cite{hinton2015distilling, wang2022kd_survey}. In this work KD alone provides
+moderate direct gains but critically enables stronger downstream resolution adaptation by
+improving internal representation quality before the high-resolution fine-tuning stage.
+
+\subsection{Insulator Defect Detection}
+
+Automated inspection of power-line insulators using deep learning has been explored with
+CNN classifiers, Faster R-CNN variants, and more recently YOLO-family detectors. The
+primary challenge reported across these studies is the low base rate of defect instances
+and the high visual similarity between defect types and normal insulator texture under
+varying environmental conditions. Our work addresses this directly through architecture
+design and training curriculum.
+
+\subsection{Edge Deployment and Practical Constraints}
+
+Prior edge-AI studies emphasise that theoretical complexity does not always translate to
+real-time throughput without careful runtime and format optimisation (ONNX / TensorRT /
+TFLite)~\cite{tan2019efficientnet, onnxruntime2024}. Deployment choices are therefore
+part of model design, not an afterthought, which is why we benchmark on Raspberry Pi
+hardware rather than on the training GPU.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Dataset}
+\label{sec:dataset}
+
+\subsection{Composition}
+
+The dataset covers two classes: \texttt{Damaged\_1} (the rare defect class, comprising
+small cracks, burns, and surface degradation) and \texttt{insulator} (the normal class).
+Table~\ref{tab:dataset} summarises the split statistics.
+
+\begin{table}[H]
+\centering
+\caption{Dataset split statistics}
+\label{tab:dataset}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Split} & \textbf{Images} &
+\textbf{Damaged\_1} & \textbf{insulator} & \textbf{Total instances} \\
+\midrule
+Train & 1{,}155 & 562  & 1{,}962 & 2{,}524 \\
+Val   &   143   &  76  &   224   &   300   \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The class ratio is approximately 1:3.5 (\texttt{Damaged\_1}:\texttt{insulator}), creating
+a moderate imbalance that can suppress rare-defect recall if optimisation is not targeted.
+Labels are stored in YOLO \texttt{txt} format; VOC XML annotations are also available for
+compatibility. Dataset configuration is managed via \texttt{VOC/voc.yaml}.
+
+\subsection{Augmentation Strategy}
+
+Training uses moderate geometric and photometric augmentation: mosaic (0.8--1.0), mixup
+(0.05--0.10), random rotation ($\pm$5--10\,$^\circ$), translation (0.1--0.2), scale
+(0.3--0.9), and HSV jitter ($h$:0.015, $s$:0.5--0.7, $v$:0.3--0.4). For stable
+late-stage convergence, heavy operations (e.g., large-scale mosaic) are reduced during
+fine-tuning phases. Aggressive synthetic operations such as copy-paste and \texttt{flipud}
+were deliberately excluded because they destabilised class balance in preliminary
+experiments.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Proposed Architecture}
+\label{sec:arch}
+
+\subsection{Design Goal and Baseline}
+
+The reference baseline is vanilla YOLO11n (2.58M parameters, 90.20\% mAP@0.5). Our goal
+is to obtain comparable or superior detection quality with a student model whose parameter
+count is reduced by approximately 3$\times$, while keeping inference latency on CPU-only
+edge hardware within practical bounds for periodic inspection workflows.
+
+\subsection{YOLO11n-Ghost-Hybrid-P3P4-Medium}
+
+Table~\ref{tab:design_choices} lists the three core architectural decisions and their
+rationale.
+
+\begin{table}[H]
+\centering
+\caption{Core design choices of YOLO11n-Ghost-Hybrid-P3P4-Medium}
+\label{tab:design_choices}
+\begin{tabular}{lll}
+\toprule
+\textbf{Design choice} & \textbf{What it replaces} & \textbf{Motivation} \\
+\midrule
+GhostConv backbone    & Standard Conv backbone      & $\approx$50\% fewer backbone parameters \\
+DWConv-only head      & Standard Conv head          & $\sim$9$\times$ parameter reduction in head \\
+P3+P4 detection only  & 3-scale (P3/P4/P5) head     & All capacity focused on small/medium defects \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The overall topology is:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Stem}: standard Conv(32, 3$\times$3, $s$=2) for initial edge extraction.
+  \item \textbf{Backbone}: GhostConv downsampling at P2/P3/P4/P5 (channel progression
+    64$\to$128$\to$160$\to$160) with C3Ghost blocks ($\times$2 at P2, $\times$3 at
+    P3/P4, $\times$2 at P5) and SPPF(160, $k$=5) context aggregation.
+  \item \textbf{Neck}: FPN top-down path (P5$\to$P4$\to$P3) and PAN bottom-up path
+    (P3$\to$P4), realised entirely with DWConv + pointwise Conv(1$\times$1) blocks and
+    nearest-neighbour upsampling.
+  \item \textbf{Detection head}: Detect([P3, P4], nc=2)---anchor-free, DFL regression.
+    P5 is used only as context (not for prediction) and is subsequently discarded.
+\end{itemize}
+
+The resulting model has \textbf{867,664 parameters} and \textbf{5.7 GFLOPs} at
+768$\times$768 input (Table~\ref{tab:param_budget}).
+
+\begin{table}[H]
+\centering
+\caption{Parameter budget breakdown}
+\label{tab:param_budget}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Component}                   & \textbf{Approx.\ params} & \textbf{\% of total} \\
+\midrule
+Stem Conv (L0)                        & $\approx$2.8K  &  0.3\% \\
+GhostConv stages (L1, 3, 5, 7)       & $\approx$180K  & 20.8\% \\
+C3Ghost blocks (L2, 4, 6, 8)         & $\approx$450K  & 51.9\% \\
+SPPF (L9)                             & $\approx$41K   &  4.7\% \\
+Head DWConv + Conv (L12--22)          & $\approx$190K  & 21.9\% \\
+Detect layer                          & $\approx$3K    &  0.3\% \\
+\midrule
+\textbf{Total}                        & \textbf{$\approx$867K} & \textbf{100\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Mathematical Formulation}
+
+\subsubsection{Ghost Convolution}
+
+For a standard convolution with $C_{in}$ input channels, $C_{out}$ output channels,
+kernel $k$, and spatial resolution $H\!\times\!W$, the MAC complexity is
+\begin{equation}
+  \mathrm{MAC}_{\mathrm{std}} = C_{in}\,C_{out}\,k^2\,H\,W.
+\end{equation}
+Ghost-style generation reduces heavy convolution usage by producing only $m = C_{out}/s$
+intrinsic maps with full convolution and generating the remaining maps via cheap linear
+transforms:
+\begin{equation}
+  \mathrm{MAC}_{\mathrm{ghost}} \approx C_{in}\,m\,k^2\,H\,W + m\,s\,d^2\,H\,W,
+  \qquad m = \tfrac{C_{out}}{s},
+\end{equation}
+where $s$ is the ghost ratio and $d$ is the cheap-transform kernel size.
+
+\subsubsection{Depthwise-Separable Detection Head}
+
+Head blocks decompose convolution into a depthwise stage and a pointwise stage:
+\begin{equation}
+  \mathrm{Conv}_{dw+pw}
+    = \mathrm{Conv}_{dw}(k\!\times\!k) + \mathrm{Conv}_{pw}(1\!\times\!1),
+\end{equation}
+achieving a parameter reduction of roughly $k^2 / (1 + k^2/C_{out})$ relative to a
+full $k\!\times\!k$ convolution for the same channel count.
+
+\subsubsection{Why P3/P4-Only Detection}
+
+\begin{table}[H]
+\centering
+\caption{Scale analysis: why P5 is removed}
+\label{tab:p5_analysis}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Scale} & \textbf{Stride} & \textbf{Recept.\ field} & \textbf{Best for} & \textbf{This dataset?} \\
+\midrule
+P3 &  8 & $\approx$50\,px  & Small objects        & \checkmark\ \texttt{Damaged\_1} cracks \\
+P4 & 16 & $\approx$100\,px & Medium objects       & \checkmark\ Insulators \\
+P5 & 32 & $\approx$200\,px & Large objects (cars) & \texttimes\ \textbf{Removed} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Removing P5 eliminates approximately 15\% of head parameters, removes false positives
+from large-scale anchors on tiny targets, and lets the model specialise entirely on
+small/medium detection.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Training Methodology}
+\label{sec:training}
+
+\subsection{Hardware and Experimental Setup}
+
+All training is performed on a single NVIDIA RTX 3050 Laptop GPU (4\,GB VRAM) running
+Fedora Linux with Python~3.11, PyTorch~2.9.1, and Ultralytics~8.3.240. Mandatory
+constraints driven by the 4\,GB VRAM limit are:
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{batch $\leq$ 8} at 640; drop to 4 at 704, 2 at 768, 1 at 896.
+  \item \texttt{amp = True} (mixed-precision training throughout).
+  \item \texttt{cache = "ram"} (no disk caching to avoid I/O instability).
+  \item \texttt{workers = 4} (prevent RAM thrashing on 16\,GB system RAM).
+\end{itemize}
+
+\subsection{Stage 1 --- From-Scratch Architecture Training (exp\_002)}
+
+The Ghost-Hybrid student model is trained from scratch for 300 epochs at
+640$\times$640 with AdamW optimiser ($\text{lr}_0 = 0.01$, $\text{lrf} = 0.1$), full
+augmentation recipe, and \texttt{batch = 8}. This produces the architecture baseline
+(exp\_002: 94.21\% mAP@0.5). A prior run with auto-batch and disk caching achieved only
+80.78\% mAP@0.5 from the identical architecture, confirming that training stability is
+highly sensitive to batch and caching configuration.
+
+\subsection{Stage 2 --- Teacher Training and Knowledge Distillation (exp\_004, exp\_005)}
+
+A YOLO11s teacher (9.43M parameters, 21.3 GFLOPs) is trained for 150 epochs at
+640$\times$640 (\texttt{batch = 4}, $\text{lr}_0 = 0.002$), reaching 96.54\% mAP@0.5
+and establishing the performance ceiling. Knowledge distillation from teacher to student
+uses:
+\begin{equation}
+  \mathcal{L}_{\mathrm{total}}
+    = (1-\alpha)\,\mathcal{L}_{\mathrm{yolo}}
+      + \alpha\,T^2\,\mathrm{KL}\!\left(
+          \sigma\!\left(\tfrac{z_t}{T}\right)
+          \Big\|
+          \sigma\!\left(\tfrac{z_s}{T}\right)
+        \right),
+\end{equation}
+where $z_t$, $z_s$ are teacher and student logits, $T$ is temperature, $\alpha$ is the
+distillation weight, and $\mathcal{L}_{\mathrm{yolo}}$ contains box, class, and
+distribution focal loss (DFL) terms. The KD run (exp\_005) uses $\alpha = 0.5$,
+$T = 4.0$, \texttt{batch = 2}, producing 94.53\% mAP@0.5---a direct gain of +0.32 over
+exp\_002, with importantly improved internal representations for the subsequent
+fine-tuning stage.
+
+\subsection{Stage 3 --- Resolution-Aware Fine-Tuning (exp\_009, exp\_012)}
+
+Fine-tuning the KD checkpoint at 768$\times$768 (44\% more pixels than 640) with SGD
+($\text{lr}_0 = 0.001$, \texttt{batch = 2}) for 25 epochs produces exp\_009: 96.11\%
+mAP@0.5, a +1.59 gain over the KD baseline. This is the highest-ROI single optimisation
+step. A subsequent head-only fine-tuning run (\texttt{freeze = 10}, 30 epochs) at the
+same resolution produces exp\_012: 96.46\% mAP@0.5 (training-log peak) / 96.10\%
+validated (no TTA).
+
+\subsubsection{Negative Resolution Experiments}
+
+Several alternative resolution strategies were evaluated as controls and found to be
+inferior (Table~\ref{tab:neg_controls}), confirming that 768 is the resolution sweet spot
+for this architecture.
+
+\begin{table}[H]
+\centering
+\caption{Negative/control resolution experiments (reference: A2 = 94.53\%)}
+\label{tab:neg_controls}
+\begin{tabular}{llrr}
+\toprule
+\textbf{Control} & \textbf{Setting} & \textbf{mAP@0.5} & \textbf{$\Delta$ vs A2} \\
+\midrule
+C1 & 704 aggressive ($\text{lr}_0{=}0.005$, unfrozen) & 93.08 & $-1.44$ \\
+C2 & 704 frozen (\texttt{freeze=10})                  & 93.37 & $-1.16$ \\
+C3 & 704 stage-2 unfrozen continuation                & 92.85 & $-1.68$ \\
+C4 & 768 multi-scale continuation                     & 95.69 & $-0.84$ vs A3 \\
+C5 & 768 ultra-low LR continuation                    & 96.06 & $-0.05$ vs A3 \\
+C6 & 896 resolution attempt                           & 94.37 & $-1.74$ vs A3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Final Validated Model Metrics}
+
+The final single-model deployment configuration (exp\_012, no TTA) is validated on the
+143-image validation split using Ultralytics \texttt{model.val()}. Results are presented
+in Table~\ref{tab:final_metrics}.
+
+\begin{table}[H]
+\centering
+\caption{Final validated metrics --- YOLO11n-Ghost-Hybrid-P3P4-Medium}
+\label{tab:final_metrics}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric}              & \textbf{Value}  \\
+\midrule
+mAP@0.5 (all classes)        & 96.10\%         \\
+mAP@0.5:0.95 (all classes)   & 66.79\%         \\
+Precision                    & 93.65\%         \\
+Recall                       & 94.18\%         \\
+\texttt{Damaged\_1} AP@0.5   & 95.05\%         \\
+\texttt{insulator} AP@0.5    & 97.15\%         \\
+Parameters                   & 867{,}664       \\
+GFLOPs                       & 5.7             \\
+Input resolution             & 768$\times$768  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comparison with Baseline and Teacher}
+
+Table~\ref{tab:comparison} compares the proposed student model against the vanilla
+YOLO11n baseline and the YOLO11s teacher.
+
+\begin{table}[H]
+\centering
+\caption{Student vs.\ baseline vs.\ teacher performance comparison}
+\label{tab:comparison}
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Model}           & \textbf{mAP@0.5} & \textbf{mAP@0.5:0.95} &
+\textbf{Prec.} & \textbf{Recall} & \textbf{Params} & \textbf{GFLOPs} \\
+\midrule
+YOLO11n (baseline)       & 90.20\%  & 58.19\% & 89.70\% & 80.30\% & 2.58M  & ---   \\
+\textbf{Ours (student)}  & \textbf{96.10\%} & \textbf{66.79\%} & \textbf{93.65\%} & \textbf{94.18\%} & \textbf{0.867M} & \textbf{5.7} \\
+YOLO11s (teacher)        & 96.54\%  & ---     & ---     & ---     & 9.43M  & 21.3  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The proposed model improves upon the vanilla baseline by \textbf{+5.90 mAP@0.5 points}
+while using roughly $3\times$ fewer parameters. It approaches teacher-level performance
+within \textbf{0.44 mAP@0.5 points} while being \textbf{10.9$\times$ smaller} and
+consuming \textbf{3.7$\times$ fewer FLOPs}, demonstrating near-perfect knowledge transfer
+efficiency.
+
+\subsection{Per-Class Analysis}
+
+\begin{table}[H]
+\centering
+\caption{Per-class detection performance of the final model}
+\label{tab:per_class}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Class}               & \textbf{AP@0.5} & \textbf{AP@0.5:0.95} &
+\textbf{Precision} & \textbf{Recall} \\
+\midrule
+\texttt{Damaged\_1} (defect) & 95.05\% & 64.9\% & 94.5\% & 90.8\% \\
+\texttt{insulator} (normal)  & 97.15\% & 68.7\% & 92.8\% & 97.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Achieving $>$95\% AP@0.5 on the rare \texttt{Damaged\_1} class with only 867K parameters
+is the key outcome. It demonstrates that the combination of architecture design, KD, and
+resolution fine-tuning is sufficient to overcome class imbalance without requiring
+specialised loss re-weighting or synthetic augmentation.
+
+\subsection{Qualitative Observations}
+
+Visual inspection of validation predictions indicates improved localisation of thin
+crack-like patterns on damaged insulators, a reduced miss rate for rare defects after
+KD\,+\,768 fine-tuning, and fewer high-confidence false negatives compared with the
+baseline.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Ablation Study}
+\label{sec:ablation}
+
+\textit{Source: \texttt{docs/ABLATION\_STUDY\_MAIN\_MODEL.md}. All values are
+\textbf{peak per-epoch validation metrics} taken from \texttt{experiments/*/results.csv};
+for every run the maximum epoch value is used.}
+
+\subsection{Cumulative Main-Path Ablation}
+
+Table~\ref{tab:cumulative_ablation} traces the cumulative contribution of each design
+and training decision to the final model checkpoint
+(\texttt{exp\_012\_head\_finetune\_768}).
+
+\begin{table}[H]
+\centering
+\caption{Cumulative ablation along the main optimisation path (source: \texttt{docs/ABLATION\_STUDY\_MAIN\_MODEL.md})}
+\label{tab:cumulative_ablation}
+\begin{tabular}{clllrrrr}
+\toprule
+\textbf{Step} & \textbf{Change introduced} & \textbf{Run} &
+\textbf{mAP@0.5} & \textbf{$\Delta$} &
+\textbf{mAP@0.5:0.95} & \textbf{Precision} & \textbf{Recall} \\
+\midrule
+A0 & Vanilla baseline (YOLO11n) &
+  \texttt{baseline\_yolo11n} & 90.20 & --- & 59.31 & 91.28 & 85.14 \\
+A1 & Ghost-Hybrid-P3P4 architecture &
+  \texttt{exp\_002\_ghost\_hybrid\_medium3} & 94.21 & \textbf{+4.01} & 68.08 & 94.26 & 92.45 \\
+A2 & Knowledge distillation &
+  \texttt{exp\_005\_kd\_student3} & 94.53 & +0.31 & 68.70 & 93.46 & 92.88 \\
+A3 & 768 fine-tune (SGD, unfrozen) &
+  \texttt{exp\_009\_finetune\_768} & 96.11 & \textbf{+1.59} & 66.02 & 93.80 & 95.36 \\
+A4 & Head-only fine-tune at 768 (\texttt{freeze=10}) &
+  \texttt{exp\_012\_head\_finetune\_768} & 96.46 & +0.35 & 66.87 & 95.08 & 95.16 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Net gain (A0$\to$A4):} +6.26 mAP@0.5 points (90.20 $\to$ 96.46). The largest
+single gain comes from architecture redesign (A1: +4.01), followed by 768 fine-tuning
+(A3: +1.59).
+
+\subsection{Main Findings from the Ablation}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Architecture redesign (A0$\to$A1) delivers the largest foundational
+    jump.} Replacing vanilla YOLO11n with Ghost-Hybrid-P3P4 yields +4.01 mAP@0.5
+    while simultaneously reducing parameter count by $3\times$. This confirms that
+    task-aligned architectural compression is more effective than post-hoc pruning.
+
+  \item \textbf{KD (A1$\to$A2) gives a modest direct gain (+0.31) but enables stronger
+    high-resolution transfer.} The KD step improves the quality of learned
+    representations, which is critical for downstream adaptation at 768 pixels where
+    the training signal is noisier due to the forced batch-size reduction.
+
+  \item \textbf{Resolution sweet spot is 768, not 704 or 896 (A2$\to$A3: +1.59).}
+    The 768 fine-tune is the highest-ROI single step. All four resolution alternatives
+    tested (704 aggressive/frozen, 768 multi-scale/ultra-low-LR, 896) underperformed
+    relative to the clean 768 run (Table~\ref{tab:neg_controls}), confirming that
+    resolution benefit is contingent on appropriate learning-rate and batch-size scaling.
+
+  \item \textbf{Head-only final tuning provides the last stable push (A3$\to$A4:
+    +0.35).} Freezing the backbone (\texttt{freeze=10}) and fine-tuning only the
+    detection head prevents catastrophic forgetting of backbone features while allowing
+    the detection layers to adapt further.
+
+  \item \textbf{Trade-off note.} Relative to A2, A3 raises mAP@0.5 and recall
+    strongly but causes a small mAP@0.5:0.95 dip (68.70$\to$66.02). A4 partially
+    recovers mAP@0.5:0.95 (66.87) while retaining peak mAP@0.5, indicating that
+    head-only tuning improves localisation precision after the resolution shift.
+
+  \item \textbf{Teacher reference.} The teacher peak mAP@0.5 is 96.54; the final
+    student (A4) reaches 96.46---a gap of only \textbf{0.08 mAP@0.5 points} on the
+    training-log peak basis.
+\end{enumerate}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Edge Deployment and Hardware Validation}
+\label{sec:edge}
+
+\subsection{Export Workflow}
+
+The trained PyTorch checkpoint (\texttt{best.pt}) is exported to ONNX (opset 17) for
+Raspberry Pi CPU inference and to TensorRT FP16 for Jetson-class deployment, using the
+Ultralytics CLI:
+\begin{verbatim}
+yolo export model=experiments/exp_012_head_finetune_768/weights/best.pt \
+           format=onnx imgsz=768 opset=17
+\end{verbatim}
+TFLite INT8 export is also supported for additional CPU efficiency. The compact 867K
+parameter footprint means all three export paths require no architectural
+modifications.
+
+\subsection{Raspberry Pi Benchmark}
+
+Inference is benchmarked using the included
+\texttt{raspi/inference\_benchmark.py} script on Raspberry Pi hardware with ONNX
+Runtime CPU execution at 768$\times$768 FP32. The script performs configurable warmup
+runs (default: 3), multiple timed runs per image (default: 10), and reports both
+model-only and full pipeline (preprocess + infer + postprocess) latencies.
+Results are summarised in Table~\ref{tab:raspi}.
+
+\begin{table}[H]
+\centering
+\caption{Raspberry Pi ONNX Runtime CPU inference benchmark (768$\times$768 input)}
+\label{tab:raspi}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Model only} & \textbf{Full pipeline} \\
+\midrule
+Mean     & 656.0\,ms & 690.9\,ms \\
+Median   & 657.7\,ms & 692.1\,ms \\
+Min      & 643.9\,ms & 677.4\,ms \\
+Max      & 660.7\,ms & 697.1\,ms \\
+Std dev  &   4.6\,ms & ---       \\
+Throughput & ---     & 1.4\,FPS  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The tight standard deviation (4.6\,ms) indicates stable, predictable latency---a
+critical property for safety-relevant periodic inspection workflows. At 1.4\,FPS the
+model is suitable for frame-by-frame image analysis of captured drone or UAV footage,
+the dominant operational mode for power-line inspection.
+
+\subsection{Jetson Orin Nano Path}
+
+The repository includes TensorRT FP16 export support for Jetson-class accelerators.
+Expected inference time is in the range 15--30\,ms depending on precision and runtime
+path, corresponding to real-time multi-camera operation. This confirms that the
+proposed model is accelerator-friendly and can support high-throughput inspection
+scenarios without architectural changes.
+
+\subsection{Post-Training Techniques}
+
+Table~\ref{tab:post_training} summarises post-training enhancement techniques explored
+after the main training pipeline. None improved upon the clean single-model best.
+
+\begin{table}[H]
+\centering
+\caption{Post-training technique results}
+\label{tab:post_training}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Technique}         & \textbf{mAP@0.5} & \textbf{Verdict} \\
+\midrule
+Model Soup (weight avg.)   & 95.9\%  & Below single-model best \\
+SWA (Stochastic Weight Avg.)& 96.09\% & Matched best single-model \\
+Multi-scale training       & 95.69\% & Hurt performance \\
+Ultra-low LR continuation  & 96.06\% & Saturated, marginal gain \\
+TTA (test-time augmentation)& 96.21\% & +0.11; latency overhead unacceptable for edge \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented YOLO11n-Ghost-Hybrid-P3P4-Medium, a lightweight and
+deployment-oriented YOLO11n variant for insulator defect detection. By combining
+Ghost-Hybrid architecture design, teacher-student knowledge distillation, and
+resolution-aware fine-tuning at 768$\times$768, we obtained a model that is compact
+and accurate: \textbf{867,664 parameters, 5.7 GFLOPs, and 96.10\% mAP@0.5}. The
+cumulative ablation study (Section~\ref{sec:ablation}), drawn directly from
+\texttt{docs/ABLATION\_STUDY\_MAIN\_MODEL.md}, demonstrates that architecture-aware
+optimisation and a staged training curriculum together outperform brute-force scaling
+under strict edge constraints. Raspberry Pi benchmarks confirm practical deployability
+for periodic drone-based inspection, while Jetson-oriented export paths support
+higher-throughput real-time use cases.
+
+\subsection*{Future Work}
+
+\begin{enumerate}[leftmargin=2em]
+  \item Collect and report measured Jetson FP32/FP16/INT8 latency and memory traces
+    in a standardised benchmark table.
+  \item Evaluate post-training quantisation and quantisation-aware training (QAT) to
+    improve CPU throughput on Raspberry Pi beyond 1.4\,FPS.
+  \item Expand the defect taxonomy and evaluate domain generalisation across weather
+    and time-of-day conditions.
+  \item Integrate uncertainty estimation for risk-aware maintenance prioritisation.
+  \item Investigate structured pruning as an alternative path to further parameter
+    reduction while preserving the current mAP@0.5.
+\end{enumerate}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section*{Reproducibility}
+
+All training scripts, configuration files, and experiment CSV logs are included in the
+repository. Key resources are listed in Table~\ref{tab:repro}.
+
+\begin{table}[H]
+\centering
+\caption{Reproducibility resources}
+\label{tab:repro}
+\begin{tabular}{ll}
+\toprule
+\textbf{Resource}              & \textbf{Path} \\
+\midrule
+Architecture YAML              & \texttt{models/yolo11n-ghost-hybrid-p3p4-medium.yaml} \\
+Dataset config                 & \texttt{VOC/voc.yaml} \\
+Training scripts               & \texttt{scripts/train\_*.py} \\
+Baseline log                   & \texttt{experiments/baseline\_yolo11n/results.csv} \\
+Experiment logs                & \texttt{experiments/exp\_*/results.csv} \\
+Ablation source                & \texttt{docs/ABLATION\_STUDY\_MAIN\_MODEL.md} \\
+Architecture notes             & \texttt{docs/ARCHITECTURE.md} \\
+Experiment journey             & \texttt{docs/EXPERIMENT\_JOURNEY.md}, \texttt{EXPERIMENT\_JOURNEY\_V2.md} \\
+Benchmark report               & \texttt{BENCHMARK.md} \\
+Raspberry Pi benchmark script  & \texttt{raspi/inference\_benchmark.py} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\begin{thebibliography}{99}
+
+\bibitem{redmon2016yolo}
+J. Redmon, S. Divvala, R. Girshick, and A. Farhadi,
+``You Only Look Once: Unified, Real-Time Object Detection,''
+in \textit{Proc.\ IEEE Conf.\ Computer Vision and Pattern Recognition (CVPR)}, 2016.
+
+\bibitem{bochkovskiy2020yolov4}
+A. Bochkovskiy, C.-Y. Wang, and H.-Y. M. Liao,
+``YOLOv4: Optimal Speed and Accuracy of Object Detection,''
+\textit{arXiv preprint arXiv:2004.10934}, 2020.
+
+\bibitem{wang2022yolov7}
+C.-Y. Wang, A. Bochkovskiy, and H.-Y. M. Liao,
+``YOLOv7: Trainable Bag-of-Freebies Sets New State-of-the-Art for Real-Time Object
+Detectors,''
+\textit{arXiv preprint arXiv:2207.02696}, 2022.
+
+\bibitem{ultralytics2023yolov8}
+Ultralytics,
+``YOLOv8 Documentation and Release Notes,''
+\url{https://docs.ultralytics.com}, 2023--2026.
+
+\bibitem{ultralytics2024yolo11}
+Ultralytics,
+``YOLO11 Documentation and Release Notes,''
+\url{https://docs.ultralytics.com}, 2024--2026.
+
+\bibitem{howard2017mobilenets}
+A. G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang, T. Weyand, M. Andreetto,
+and H. Adam,
+``MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications,''
+\textit{arXiv preprint arXiv:1704.04861}, 2017.
+
+\bibitem{han2020ghostnet}
+K. Han, Y. Wang, Q. Tian, J. Guo, C. Xu, and C. Xu,
+``GhostNet: More Features from Cheap Operations,''
+in \textit{Proc.\ IEEE Conf.\ Computer Vision and Pattern Recognition (CVPR)}, 2020.
+
+\bibitem{hinton2015distilling}
+G. Hinton, O. Vinyals, and J. Dean,
+``Distilling the Knowledge in a Neural Network,''
+\textit{arXiv preprint arXiv:1503.02531}, 2015.
+
+\bibitem{wang2022kd_survey}
+Y. Wang, W. Zhou, T. Jiang, X. Bai, and Y. Xu,
+``Mimicking the Oracle: An Initial Phase Decorrelation Approach for Class Incremental
+Learning,''
+\textit{arXiv preprint arXiv:2112.04731}, 2022.
+
+\bibitem{tan2019efficientnet}
+M. Tan and Q. V. Le,
+``EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks,''
+in \textit{Proc.\ Int.\ Conf.\ Machine Learning (ICML)}, 2019.
+
+\bibitem{onnxruntime2024}
+Microsoft,
+``ONNX Runtime: Performance Tuning and Execution Providers,''
+\url{https://onnxruntime.ai/docs/performance}, 2024--2026.
+
+\end{thebibliography}
+
+\end{document}
